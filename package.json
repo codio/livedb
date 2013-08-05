@@ -1,11 +1,11 @@
 {
   "name": "livedb",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Realtime database wrapper",
   "main": "lib/index.js",
   "dependencies": {
     "redis": "~0.8",
-    "ottypes": "~1",
+    "ottypes": "https://github.com/codio/ottypes/tarball/master",
     "deep-is": "0.1.2",
     "arraydiff": "~0.1.1"
   },
@@ -22,9 +22,8 @@
   },
   "repository": {
     "type": "git",
-    "url": "git://github.com/share/livedb.git"
+    "url": "https://github.com/codio/livedb.git"
   },
   "author": "Joseph Gentle <josephg@gmail.com>",
-  "license": "MIT",
-  "gitHead": "a95ee727e5cb43a40476f58554774b776fb08f68"
+  "license": "MIT"
 }
