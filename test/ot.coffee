@@ -13,6 +13,27 @@ assert = require 'assert'
 ot = require '../lib/ot'
 
 describe 'ot', ->
+  before ->
+    # apply and normalize put a creation / modification timestamp on snapshots
+    # & ops. We'll verify its correct by checking that its in the range of time
+    # from when the tests start running to 10 seconds after the tests start
+    # running. Hopefully the tests aren't slower than that.
+    before = Date.now()
+    after = before + 10 * 1000
+    checkMetaTs = (field) -> (data) ->
+      assert.ok data.m
+      assert.ok before <= data.m[field] < after
+      delete data.m[field]
+      data
+
+    @checkOpTs = checkMetaTs 'ts'
+    @checkDocCreate = checkMetaTs 'ctime'
+    @checkDocModified = checkMetaTs 'mtime'
+    @checkDocTs = (doc) =>
+      @checkDocCreate doc
+      @checkDocModified doc
+      doc
+
   describe 'checkOpData', ->
     it 'fails if opdata is not an object', ->
       assert.ok ot.checkOpData 'hi'
@@ -32,6 +53,9 @@ describe 'ot', ->
       assert.ok ot.checkOpData {create:{}}
       assert.ok ot.checkOpData {create:123}
 
+    it 'fails if the type is missing', ->
+      assert.ok ot.checkOpData {create:{type:"something that does not exist"}}
+
     it 'accepts valid create operations', ->
       assert.equal null, ot.checkOpData {create:{type:simple.uri}}
       assert.equal null, ot.checkOpData {create:{type:simple.uri, data:'hi there'}}
@@ -43,10 +67,14 @@ describe 'ot', ->
       assert.equal null, ot.checkOpData {op:[1,2,3]}
 
   describe 'normalize', ->
-    it 'expands type names', ->
+    it 'expands type names in normalizeType', ->
+      assert.equal simple.uri, ot.normalizeType 'simple'
+
+    it 'expands type names in an op', ->
       opData = create:type:'simple'
       ot.normalize opData
-      assert.deepEqual opData, {create:type:simple.uri}
+      @checkOpTs opData
+      assert.deepEqual opData, {create:{type:simple.uri}, m:{}}
 
   describe 'apply', ->
     it 'fails if the versions dont match', ->
@@ -68,12 +96,14 @@ describe 'ot', ->
       it 'creates doc data correctly when no initial data is passed', ->
         doc = {v:5}
         assert.equal null, ot.apply doc, {v:5, create:{type:simple.uri}}
-        assert.deepEqual doc, {v:6, type:simple.uri, data:str:''}
+        @checkDocTs doc
+        assert.deepEqual doc, {v:6, type:simple.uri, m:{}, data:str:''}
 
       it 'creates doc data when it is given initial data', ->
         doc = {v:5}
         assert.equal null, ot.apply doc, {v:5, create:{type:simple.uri, data:'Hi there'}}
-        assert.deepEqual doc, {v:6, type:simple.uri, data:str:'Hi there'}
+        @checkDocTs doc
+        assert.deepEqual doc, {v:6, type:simple.uri, m:{}, data:str:'Hi there'}
 
       it.skip 'runs pre and post validation functions'
     
@@ -88,6 +118,11 @@ describe 'ot', ->
         assert.equal null, ot.apply doc, {v:6, del:true}
         assert.deepEqual doc, {v:7}
 
+      it 'removes any TS on the doc', ->
+        doc = {v:6, type:simple.uri, m:{ctime:1, mtime:2}, data:str:'hi'}
+        assert.equal null, ot.apply doc, {v:6, del:true}
+        assert.deepEqual doc, {v:7}
+
     describe 'op', ->
       it 'fails if the document does not exist', ->
         assert.equal 'Document does not exist', ot.apply {v:6}, {v:6, op:[1,2,3]}
@@ -98,9 +133,28 @@ describe 'ot', ->
       it 'applies the operation to the document data', ->
         doc = {v:6, type:simple.uri, data:str:'Hi'}
         assert.equal null, ot.apply doc, {v:6, op:{position:2, text:' there'}}
-        assert.deepEqual doc, {v:7, type:simple.uri, data:str:'Hi there'}
+        @checkDocModified doc
+        assert.deepEqual doc, {v:7, type:simple.uri, m:{}, data:str:'Hi there'}
+
+      it 'updates mtime', ->
+        doc = {v:6, type:simple.uri, m:{ctime:1, mtime:2}, data:str:'Hi'}
+        assert.equal null, ot.apply doc, {v:6, op:{position:2, text:' there'}}
+        @checkDocModified doc
+        assert.deepEqual doc, {v:7, type:simple.uri, m:{ctime:1}, data:str:'Hi there'}
 
       it.skip 'shatters the operation if it can, and applies it incrementally'
+
+    describe 'noop', ->
+      it 'works on existing docs', ->
+        doc = {v:6, type:simple.uri, m:{ctime:1, mtime:2}, data:str:'Hi'}
+        assert.equal null, ot.apply doc, {v:6}
+        # same, but with v+1.
+        assert.deepEqual doc, {v:7, type:simple.uri, m:{ctime:1, mtime:2}, data:str:'Hi'}
+
+      it 'works on nonexistant docs', ->
+        doc = {v:0}
+        assert.equal null, ot.apply doc, {v:0}
+        assert.deepEqual doc, {v:1}
 
   describe 'transform', ->
     it 'fails if the version is specified on both and does not match', ->
@@ -118,6 +172,11 @@ describe 'ot', ->
 
     it 'create by op fails', ->
       assert.equal 'Document created remotely', ot.transform null, {v:10, create:type:simple.uri}, {v:10, op:{position:15, text:'hi'}}
+
+    it 'create by noop ok', ->
+      op = {create:{type:simple.uri}, v:6}
+      assert.equal null, ot.transform null, op, {v:6}
+      assert.deepEqual op, {create:{type:simple.uri}, v:7}
 
     it 'delete by create fails', ->
       assert.ok ot.transform null, {del:true}, {create:type:simple.uri}
@@ -140,6 +199,15 @@ describe 'ot', ->
       assert.equal null, ot.transform simple.uri, op, {op:{}, v:8}
       assert.deepEqual op, {del:true}
 
+    it 'delete by noop ok', ->
+      op = {del:true, v:6}
+      assert.equal null, ot.transform null, op, {v:6}
+      assert.deepEqual op, {del:true, v:7}
+
+      op = {del:true}
+      assert.equal null, ot.transform null, op, {v:6}
+      assert.deepEqual op, {del:true}
+
     it 'op by create fails', ->
       assert.ok ot.transform null, {op:{}}, {create:type:simple.uri}
 
@@ -157,5 +225,62 @@ describe 'ot', ->
       assert.equal null, ot.transform simple.uri, op1, op2
       assert.deepEqual op1, {op:{position:15, text:'hi'}}
 
+    it 'op by noop ok', ->
+      # I don't think this is ever used, but whatever.
+      op = {v:6, op:{position:10, text:'hi'}}
+      assert.equal null, ot.transform simple.uri, op, {v:6}
+      assert.deepEqual op, {v:7, op:{position:10, text:'hi'}}
+
+    it 'noop by anything is ok', ->
+      op = {}
+      assert.equal null, ot.transform simple.uri, op, {v:6, op:{position:10, text:'hi'}}
+      assert.deepEqual op, {}
+      assert.equal null, ot.transform simple.uri, op, {del:true}
+      assert.deepEqual op, {}
+      assert.equal null, ot.transform null, op, {create:type:simple.uri}
+      assert.deepEqual op, {}
+      assert.equal null, ot.transform null, op, {}
+      assert.deepEqual op, {}
+
     # And op by op is tested in the first couple of tests.
+
+  describe 'applyPresence', ->
+    it 'sets', ->
+      p = {data:{}}
+      assert.equal null, ot.applyPresence p, {val:{id:{y:6}}}
+      assert.deepEqual p, data:{id:{y:6}}
+
+      assert.equal null, ot.applyPresence p, {p:['id'], val:{z:7}}
+      assert.deepEqual p, data:{id:{z:7}}
+      
+      assert.equal null, ot.applyPresence p, {p:['id','z'], val:8}
+      assert.deepEqual p, data:{id:{z:8}}
+
+    it 'clears data', ->
+      p = {data:{id:{name:'sam'}}}
+      assert.equal null, ot.applyPresence p, {val:null}
+      assert.deepEqual p, data:{}
+      
+    it "doesn't allow special keys other than _cursor", ->
+      p = {}
+      # assert.equal 'Cannot set reserved value', ot.applyPresence p, {val:{id:{_x:'hi'}}}
+      # assert.deepEqual p, {}
+      assert.equal 'Cannot set reserved value', ot.applyPresence p, {p:['id'], val:{_x:'hi'}}
+      assert.deepEqual p, {}
+      assert.equal 'Cannot set reserved value', ot.applyPresence p, {p:['id','_x'], val:'hi'}
+      assert.deepEqual p, {}
+
+  describe 'transformPresence', ->
+    it 'updates cursor positions', ->
+
+
+
+
+
+
+
+
+
+
+
 

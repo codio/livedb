@@ -1,24 +1,26 @@
 {
   "name": "livedb",
-  "version": "0.2.0",
+  "version": "0.4.2",
   "description": "Realtime database wrapper",
   "main": "lib/index.js",
   "dependencies": {
-    "redis": "~0.8",
     "ottypes": "~1",
-    "deep-is": "0.1.2",
-    "arraydiff": "~0.1.1"
+    "deep-is": "~0.1",
+    "arraydiff": "~0.1",
+    "async": "~0.7"
   },
   "optionalDependencies": {
-    "hiredis": "~0.1.14"
+    "redis": "~0.10",
+    "hiredis": "~0.1",
+    "statsd-client": "*"
   },
   "devDependencies": {
-    "coffee-script": "~1.6.2",
-    "mocha": "~1"
+    "mocha": "~1",
+    "sinon": "~1",
+    "coffee-script": "~1.7"
   },
   "scripts": {
-    "prepublish": "make all",
-    "test": "mocha"
+    "test": "node_modules/.bin/mocha"
   },
   "repository": {
     "type": "git",
