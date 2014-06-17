@@ -4,14 +4,16 @@ This is a database wrapper which exposes the API that realtime databases should
 have.
 
 You can submit operations (edit documents) and subscribe to documents.
-Subscribing gives you a stream of all operations applied to theh given
-document. You can also make queries, which give you a feed of changes in the
-result set while the query is open.
+Subscribing gives you a stream of all operations applied to the given
+document. You can also make live bound queries, which give you the results of
+your query and a feed of changes to the result set over time.
 
-Currently this is very new and only used by ShareJS. To use it, you need a
-snapshot database wrapper. The obvious choice is mongodb. A database wrapper
-for mongo is available in
-[share/livedb-mongo](https://github.com/share/livedb-mongo).
+To use it, you need a database to actually store your data in.
+A database wrapper for mongo is available in
+[share/livedb-mongo](https://github.com/share/livedb-mongo). I hope to add more
+over time.
+
+If you want to mess about, livedb also has an in-memory database backend you can use, but don't use this in production.
 
 
 ## Data Model
@@ -35,13 +37,50 @@ OT). Finally you can delete the document with a delete operation. By
 default, livedb stores all operations forever - nothing is truly deleted.
 
 
-### Snapshot backend, operation logs and query backends
+## Using Livedb
 
-Oh my.
+Livedb requires a backend database to store snapshots & operations. You can put
+snapshots & operations in different places if you want, though its easier to
+put all data in the same place.
 
-LiveDB lets you store your documents and operations wherever you want. It can
-use custom query sources to back its live queries. Some of these APIs are in
-flux at the moment - **Document ME!**
+The backend database(s) needs to implement a [simple API which has
+documentation and a sample implementation
+here](https://github.com/share/livedb/blob/master/lib/memory.js). Currently the
+only database binding is [livedb-mongo](https://github.com/share/livedb-mongo).
+
+A livedb client is created using either an options object or a database
+backend. If you specify a database backend, its used as both oplog and
+snapshot.
+
+```javascript
+db = require('livedb-mongo')('localhost:27017/test?auto_reconnect', {safe:true});
+livedb = require('livedb').client(db);
+```
+
+Or using an options object:
+
+```
+db = require('livedb-mongo')('localhost:27017/test?auto_reconnect', {safe:true});
+livedb = require('livedb').client({db:db});
+```
+
+You can use a different database for both snapshots and operations:
+
+```
+snapshotdb = require('livedb-mongo')('localhost:27017/test?auto_reconnect', {safe:true});
+oplog = {writeOp:..., getVersion:..., getOps:...};
+livedb = require('livedb').client({snapshotDb:snapshotdb, oplog:oplog});
+```
+
+
+`client({db:db});` is a shorthand for `client({snapshotDb:db, oplog:db})`.
+
+The options object can also be passed:
+
+- **extraDbs:** *{name:query db}* This is used to register extra database backends which will be
+    notified whenever operations are submitted. They can also be used in
+    queries.
+
 
 ### Creating documents
 
