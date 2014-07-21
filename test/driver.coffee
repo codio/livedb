@@ -17,7 +17,7 @@ createOp = (v = 0) ->
 nextDocId = 0
 
 module.exports = runTests = (createDriver, destroyDriver, distributed = no) ->
-  beforeEach ->  
+  beforeEach ->
     # Each test gets its own doc id, if it wants it.
     @docName = "id#{nextDocId++}"
 
@@ -158,9 +158,11 @@ module.exports = runTests = (createDriver, destroyDriver, distributed = no) ->
       it 'can observe a document that doesnt exist yet', (done) ->
         @subscribe 'users', @docName, 0, {}, (err, stream) =>
           stream.on 'readable', ->
-            assert.deepEqual stream.read(), createOp()
-            stream.destroy()
-            done()
+            stream.on 'data', (chunk) ->
+              if chunk
+                assert.deepEqual chunk, createOp()
+                stream.destroy()
+                done()
 
           @create()
 
