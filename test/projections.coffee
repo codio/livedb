@@ -28,7 +28,6 @@ readN = (stream, n, callback) ->
   more = (err, data) ->
     return callback err if err
 
-    # console.log 'read', data
     buffer.push data
     if buffer.length is n
       return callback null, buffer
@@ -107,6 +106,7 @@ describe 'projection utility methods', ->
       it 'allows editing in-property fields', ->
         @op {}, [p:['x', 'y'], na:1], []
         @op {x:true}, [p:['x', 'y'], na:1]
+        @op {x:true}, [p:['x'], na:1]
         @op {y:true}, [p:['x', 'y'], na:1], []
 
     describe 'create', ->
@@ -177,7 +177,7 @@ describe 'projections', ->
     # Override to change the default value of data
     @create = (data, cb) ->
       [data, cb] = [{}, data] if typeof data is 'function'
-      @create2 @docName, data, cb
+      @createDoc @docName, data, cb
 
   afterEach teardown
 
@@ -212,9 +212,9 @@ describe 'projections', ->
           stripTs ops
 
           assert.equal ops.length, 2
-          assert.deepEqual ops[0], {v:0, create:{type:json0, data:{x:{}, y:2}}, m:{}}
-          assert.deepEqual ops[1], {v:1, op:[{p:['y'], na:1}, {p:['z'], oi:4}, {p:['x', 'seph'], oi:'super'}], m:{}}
-          
+          assert.deepEqual ops[0], {v:0, create:{type:json0, data:{x:{}, y:2}}, m:{}, src:''}
+          assert.deepEqual ops[1], {v:1, op:[{p:['y'], na:1}, {p:['z'], oi:4}, {p:['x', 'seph'], oi:'super'}], m:{}, src:''}
+
           done()
 
     it 'filters ops through subscriptions', (done) -> @create {a:1, x:2, y:2}, =>
@@ -224,9 +224,9 @@ describe 'projections', ->
           throw Error err if err
           @client.submit @cName, @docName, v:2, op:[{p:['y'], na:1}, {p:['a'], na:1}], (err) =>
             expected = [
-              {v:0, m:{}, create:{type:json0, data:{x:2, y:2}}}
-              {v:1, m:{}, op:[{p:['x'], na:1}]}
-              {v:2, m:{}, op:[{p:['y'], na:1}]}
+              {v:0, m:{}, create:{type:json0, data:{x:2, y:2}}, src:''}
+              {v:1, m:{}, op:[{p:['x'], na:1}], src:''}
+              {v:2, m:{}, op:[{p:['y'], na:1}], src:''}
             ]
             readN stream, 3, (err, data) =>
               stripTs data
@@ -235,7 +235,7 @@ describe 'projections', ->
               @client.driver._checkForLeaks false, done
 
     it 'filters ops through bulk subscriptions', (done) ->
-      @create2 'one', {a:1, x:2, y:3}, => @create2 'two', {a:1, x:2, y:3}, =>
+      @createDoc 'one', {a:1, x:2, y:3}, => @createDoc 'two', {a:1, x:2, y:3}, =>
 
         req = {}
         req[@cName] = {one:0, two:1}
@@ -243,7 +243,7 @@ describe 'projections', ->
 
         @client.bulkSubscribe req, (err, result) =>
           throw Error err if err
-          
+
           n = 4
           passPart = -> done() if --n is 0
 
@@ -253,16 +253,16 @@ describe 'projections', ->
               assert.deepEqual op, expected
               passPart()
 
-          expectOp result[@cName].one, {v:0, create:{type:json0, data:{a:1, x:2, y:3}}, m:{}}
-          expectOp result[@proj].one, {v:0, create:{type:json0, data:{x:2, y:3}}, m:{}}
-          expectOp result[@cName].two, {v:1, op:[{p:['a'], na:1}], m:{}}
-          expectOp result[@proj].two, {v:1, op:[], m:{}}
+          expectOp result[@cName].one, {v:0, create:{type:json0, data:{a:1, x:2, y:3}}, m:{}, src:''}
+          expectOp result[@proj].one, {v:0, create:{type:json0, data:{x:2, y:3}}, m:{}, src:''}
+          expectOp result[@cName].two, {v:1, op:[{p:['a'], na:1}], m:{}, src:''}
+          expectOp result[@proj].two, {v:1, op:[], m:{}, src:''}
 
           @client.submit @cName, 'two', op:[{p:['a'], na:1}]
 
     it 'does not modify the request in a bulkSubscribe when there are projections', (done) ->
       # regression
-      @create2 'one', {a:1, x:2, y:3}, => @create2 'two', {a:1, x:2, y:3}, =>
+      @createDoc 'one', {a:1, x:2, y:3}, => @createDoc 'two', {a:1, x:2, y:3}, =>
 
         req = {}
         req[@cName] = {one:0, two:1}
@@ -275,7 +275,7 @@ describe 'projections', ->
           done()
 
     it 'does not leak memory when bulk subscribing', (done) ->
-      @create2 'one', {a:1, x:2, y:3}, => @create2 'two', {a:1, x:2, y:3}, =>
+      @createDoc 'one', {a:1, x:2, y:3}, => @createDoc 'two', {a:1, x:2, y:3}, =>
 
         req = {}
         req[@cName] = {one:0, two:1}
@@ -328,7 +328,7 @@ describe 'projections', ->
 
         @client.submit @proj, @docName, op, (err) =>
           assert.ok err
-        
+
           @client.getOps @proj, @docName, v, null, (err, ops) =>
             throw Error err if err
             assert.equal ops.length, 0
@@ -354,10 +354,11 @@ describe 'projections', ->
         done()
 
     it 'projects data returned by queryFetch', (done) ->
-      @create2 'aaa', {a:5, x:3}, => @create2 'bbb', {x:3}, => @create2 'ccc', {}, =>
+      @createDoc 'aaa', {a:5, x:3}, => @createDoc 'bbb', {x:3}, => @createDoc 'ccc', {}, =>
         @client.queryFetch @proj, null, {}, (err, results) =>
           throw Error err if err
           results.sort (a, b) -> if b.docName > a.docName then -1 else 1
+          delete result.m for result in results
 
           assert.deepEqual results, [
             {v:1, type:json0, docName:'aaa', data:{x:3}}
@@ -375,6 +376,7 @@ describe 'projections', ->
 
       @client.queryFetch @proj, null, {}, (err, results) =>
         throw Error err if err
+        delete result.m for result in results
         assert.deepEqual results, [{docName:@docName, data:{x:5}, type:json0, v:1}]
         done()
 
@@ -390,40 +392,39 @@ describe 'projections', ->
 
       @client.queryFetch @proj, 'cool cats', {}, (err, results) =>
         throw Error err if err
+        delete result.m for result in results
         assert.deepEqual results, [{docName:@docName, data:{x:5}, type:json0, v:1}]
         done()
 
-    # Do these tests with polling turned on and off.
-    # for poll in [false] then do (poll) -> describe "poll:#{poll}", ->
-    for poll in [false, true] then do (poll) -> describe "poll:#{poll}", ->
+    # Do these tests with polling turned on and off
+    [false, true].forEach (poll) -> describe "poll:#{poll}", ->
 
       opts = {poll:poll, pollDelay:0}
       it 'projects data returned by queryPoll', (done) ->
-        @create2 'aaa', {a:5, x:3}, => @create2 'bbb', {x:3}, => @create2 'ccc', {}, =>
-          @client.queryPoll @proj, null, opts, (err, emitter) =>
+        @createDoc 'aaa', {a:5, x:3}, => @createDoc 'bbb', {x:3}, => @createDoc 'ccc', {}, =>
+          @client.queryPoll @proj, null, opts, (err, emitter, results) =>
             throw Error err if err
 
-            results = emitter.data
             results.sort (a, b) -> if b.docName > a.docName then -1 else 1
+            delete result.m for result in results
             assert.deepEqual results, [
-              {v:1, type:json0, c:@proj, docName:'aaa', data:{x:3}}
-              {v:1, type:json0, c:@proj, docName:'bbb', data:{x:3}}
-              {v:1, type:json0, c:@proj, docName:'ccc', data:{}}
+              {v:1, type:json0, docName:'aaa', data:{x:3}}
+              {v:1, type:json0, docName:'bbb', data:{x:3}}
+              {v:1, type:json0, docName:'ccc', data:{}}
             ]
             done()
 
       it 'projects data returned by queryPoll in a diff', (done) ->
-        @client.queryPoll @proj, 'unused', opts, (err, emitter) =>
+        @client.queryPoll @proj, 'unused', opts, (err, emitter, results) =>
           throw Error err if err
-          assert.deepEqual emitter.data, []
+          assert.deepEqual results, []
 
-          emitter.on 'diff', (stuff) =>
+          emitter.onDiff = (stuff) =>
             delete stuff[0].values[0].m
             assert.deepEqual stuff, [
-              type: 'insert'
               index: 0
               values: [
-                v:1, data:{x:5}, type:json0, docName:@docName, c:@proj
+                v:1, data:{x:5}, type:json0, docName:@docName
               ]
             ]
             done()
@@ -435,19 +436,14 @@ describe 'projections', ->
       @db.queryDoc = -> throw Error 'db.queryDoc should not be called'
       @db.queryDocProjected = (liveDb, index, cName, docName, fields, query, callback) =>
         called = true
-        callback null, {v:1, data:{x:5}, type:json0, docName:@docName, c:@proj}
+        callback null, {v:1, data:{x:5}, type:json0, docName:@docName}
 
-      @client.queryPoll @proj, 'unused', {poll:false}, (err, emitter) =>
+      @client.queryPoll @proj, 'unused', {poll:false}, (err, emitter, results) =>
         throw Error err if err
-        assert.deepEqual emitter.data, []
+        assert.deepEqual results, []
 
-        emitter.on 'diff', (stuff) =>
+        emitter.onDiff = (stuff) =>
           assert called
           done()
 
         @create {x:5, a:1}
-
-
-
-
-

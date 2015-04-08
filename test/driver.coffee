@@ -98,6 +98,102 @@ module.exports = runTests = (createDriver, destroyDriver, distributed = no) ->
               assert.deepEqual ops, (createOp(v) for v in [0..2])
               done()
 
+  describe 'dirty lists', ->
+    beforeEach ->
+      @v = 0
+      @append = (dirtyData, callback) =>
+        @driver.atomicSubmit 'users', 'seph', createOp(@v++), {dirtyData}, (err) ->
+          throw Error err if err
+          callback?()
+
+      @checkConsume = (list, expected, options, callback) ->
+        [options, callback] = [{}, options] if typeof options is 'function'
+        called = false
+        consume = (data, callback) ->
+          assert !called
+          called = true
+          assert.deepEqual data, expected
+          callback()
+
+        @driver.consumeDirtyData list, options, consume, (err) ->
+          throw Error err if err
+          assert.equal called, expected isnt null
+          callback()
+
+    it 'returns dirty data through consume', (done) ->
+      @append {x:{complex:'data'}}, =>
+        @checkConsume 'x', [{complex:'data'}], done
+
+    it 'does not give you consumed data again', (done) ->
+      @append {x:1}, =>
+        @checkConsume 'x', [1], =>
+          @append {x:2}, =>
+            @checkConsume 'x', [2], done
+
+    it 'lets your list grow', (done) ->
+      @append {x:1}, => @append {x:2}, => @append {x:3}, =>
+        @checkConsume 'x', [1,2,3], done
+
+    it 'does not consume data if your consume function errors', (done) ->
+      @append {x:1}, =>
+        consume = (data, callback) -> callback('ermagherd')
+        @driver.consumeDirtyData 'x', {}, consume, (err) =>
+          assert.deepEqual err, 'ermagherd'
+
+          @checkConsume 'x', [1], done
+
+    it 'does not call consume if there is no data', (done) ->
+      consume = (data, callback) -> throw Error 'Consume called with no data'
+      @driver.consumeDirtyData 'x', {}, consume, (err) ->
+        throw Error err if err
+        done()
+
+    it 'does not call consume if all the data has been consumed', (done) ->
+      @append {x:1}, => @append {x:2}, => @append {x:3}, =>
+        @checkConsume 'x', [1,2,3], =>
+          consume = (data, callback) ->
+            throw Error 'Consume called after all data consumed'
+          @driver.consumeDirtyData 'x', {}, consume, (err) =>
+            throw Error err if err
+            done()
+
+    it 'only consumes the data sent to checkConsume', (done) ->
+      @append {x:1}, =>
+        consume = (data, callback) =>
+          @append {x:2}, callback
+
+        @driver.consumeDirtyData 'x', {}, consume, (err) =>
+          throw Error err if err
+          
+          @checkConsume 'x', [2], done
+
+    it 'handles lists independently', (done) ->
+      @append {x:'x1', y:'y1', z:'z1'}, =>
+        @checkConsume 'x', ['x1'], =>
+          @append {x:'x2', y:'y2', z:'z2'}, =>
+            @checkConsume 'y', ['y1', 'y2'], =>
+              @append {x:'x3', y:'y3', z:'z3'}, =>
+                @checkConsume 'x', ['x2', 'x3'], =>
+                  @checkConsume 'y', ['y3'], =>
+                    @checkConsume 'z', ['z1', 'z2', 'z3'], =>
+                      done()
+
+    it 'limit only returns as many as you ask for', (done) ->
+      @append {x:1}, => @append {x:2}, => @append {x:3}, =>
+        @checkConsume 'x', [1, 2], limit:2, =>
+          @checkConsume 'x', [3], limit:2, =>
+            @checkConsume 'x', null, limit:2, =>
+              @append {x:4}, =>
+                @checkConsume 'x', [4], limit:2, done
+
+    describe 'wait stress test', ->
+      for delay in [0..10] then do (delay) ->
+        it 'delaying ' + delay, (done) ->
+          @checkConsume 'x', [1], wait:true, done
+
+          setTimeout =>
+            @append {x:1}
+          , delay
 
   describe 'bulkGetOpsSince', ->
     it 'handles multiple gets which are missing from the oplog', (done) -> # regression
@@ -236,7 +332,7 @@ module.exports = runTests = (createDriver, destroyDriver, distributed = no) ->
                 submitCount++
                 # console.log "op", submitCount
                 doneWork()
-            , 100 * Math.random()
+            , (100 * Math.random())|0
 
             d.subscribe 'users', 'seph', 1, {}, (err, stream) =>
               # console.log "subscribed", i
