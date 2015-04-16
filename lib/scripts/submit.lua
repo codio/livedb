@@ -1,7 +1,12 @@
-local clientNonceKey, versionKey, opLogKey, docOpChannel = unpack(KEYS)
-local seq, v, logEntry, docPubEntry, docVersion = unpack(ARGV) -- From redisSubmit, below.
+local versionKey, opLogKey, docOpChannel = unpack(KEYS)
+-- The regular keys are followed by the dirty list names
+local DIRTY_KEYS_IDX = 4
+
+local v, logEntry, docPubEntry, docVersion = unpack(ARGV) -- From redisSubmit, below.
+-- ... and the regular args are followed by the dirty list data.
+local DIRTY_ARGS_IDX = 5
+
 v = tonumber(v)
-seq = tonumber(seq)
 docVersion = tonumber(docVersion)
 
 -- Check the version matches.
@@ -40,14 +45,6 @@ elseif v > docVersion then
   return "Version from the future"
 end
 
--- Dedup, but only if the id has been set.
-if seq ~= nil then
-  local nonce = redis.call('GET', clientNonceKey)
-  if nonce ~= false and tonumber(nonce) >= seq then
-    return "Op already submitted"
-  end
-end
-
 -- Ok to submit. Save the op in the oplog and publish.
 redis.call('rpush', opLogKey, logEntry)
 redis.call('set', versionKey, v + 1)
@@ -57,10 +54,11 @@ redis.call('persist', versionKey)
 
 redis.call('publish', docOpChannel, docPubEntry)
 
--- Finally, save the new nonce. We do this here so we only update the nonce if
--- we're at the most recent version in the oplog.
-if seq ~= nil then
-  --redis.log(redis.LOG_NOTICE, "set " .. clientNonceKey .. " to " .. seq)
-  redis.call('SET', clientNonceKey, seq)
-  redis.call('EXPIRE', clientNonceKey, 60*60*24*7) -- 1 week
+for i=DIRTY_KEYS_IDX,#KEYS do
+  local data = ARGV[i - DIRTY_KEYS_IDX + DIRTY_ARGS_IDX]
+  local dirtyKey = KEYS[i]
+  redis.call('rpush', dirtyKey, data)
+  -- It doesn't matter what data we publish here, it just needs to kick the
+  -- client.
+  redis.call('publish', dirtyKey, 1)
 end
